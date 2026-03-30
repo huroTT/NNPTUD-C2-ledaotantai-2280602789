@@ -19,9 +19,9 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
-mongoose.connect('mongodb://localhost:27017/NNPTUD-C2');
+mongoose.connect('mongodb://localhost:27017/');
 mongoose.connection.on('connected', () => {
-  console.log("connected");
+  console.log("connected mongosee");
 })
 
 app.use('/api/v1/', require('./routes/index'));

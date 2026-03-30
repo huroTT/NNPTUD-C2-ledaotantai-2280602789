@@ -201,4 +201,87 @@ router.post('/excel', uploadExcel.single('file'), async function (req, res, next
 })
 
 
-module.exports = router;
+let { sendUserPassword } = require('../utils/sendMailHandler');
+let userModel = require('../schemas/users');
+let roleModel = require('../schemas/roles');
+let crypto = require('crypto');
+
+function generateRandomPassword(length = 16) {
+    return crypto.randomBytes(Math.ceil(length / 2))
+        .toString('hex') // Chuyển đổi thành chuỗi hex
+        .slice(0, length); // Lấy độ dài mong muốn
+}
+
+router.post('/user-excel', uploadExcel.single('file'), async function (req, res, next) {
+    if (!req.file) {
+        return res.status(404).send({ message: "file upload rong" });
+    }
+
+    let pathFile = path.join(__dirname, '../uploads', req.file.filename);
+    let workbook = new excelJS.Workbook();
+    await workbook.xlsx.readFile(pathFile);
+    let worksheet = workbook.worksheets[0];
+
+    // Find the 'USER' role ID or create it if not exists.
+    let userRole = await roleModel.findOne({ name: 'USER' });
+    if (!userRole) {
+        userRole = new roleModel({
+            name: 'USER',
+            description: 'Default user role'
+        });
+        await userRole.save();
+    }
+
+    let result = [];
+
+    try {
+        for (let index = 2; index <= worksheet.rowCount; index++) {
+            const row = worksheet.getRow(index);
+            let username = row.getCell(1).value;
+            let email = row.getCell(2).value;
+
+            // Handle potential cell objects from ExcelJS (e.g., hyperlinks)
+            if (typeof username === 'object' && username !== null) username = username.text || username.result || "";
+            if (typeof email === 'object' && email !== null) email = email.text || email.result || "";
+
+            if (!username || !email) {
+                result.push({ success: false, data: `Dòng ${index}: Thiếu thông tin username hoặc email` });
+                continue;
+            }
+
+            // Check if user already exists
+            let existingUser = await userModel.findOne({ $or: [{ username: username }, { email: email }] });
+            if (existingUser) {
+                result.push({ success: false, data: `Dòng ${index}: Username hoặc email đã tồn tại` });
+                continue;
+            }
+
+            let plainPassword = generateRandomPassword(16);
+
+            let newUser = new userModel({
+                username: username,
+                email: email,
+                password: plainPassword, // the schema's pre-save hook will hash this
+                role: userRole._id
+            });
+
+            await newUser.save();
+
+            // Send email after creation
+            try {
+                await sendUserPassword(email, username, plainPassword);
+                result.push({ success: true, data: `Dòng ${index}: Đã tạo user ${username} và gửi email` });
+            } catch (emailError) {
+                result.push({ success: true, data: `Dòng ${index}: Đã tạo user ${username} nhưng LỖI gửi email: ${emailError.message}` });
+            }
+        }
+
+        res.send(result);
+    } catch (error) {
+        res.status(500).send({ message: "Gặp lỗi trong quá trình xử lý: " + error.message });
+    } finally {
+        fs.unlinkSync(pathFile);
+    }
+});
+
+module.exports = router;
